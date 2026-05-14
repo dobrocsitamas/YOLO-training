@@ -1,15 +1,21 @@
-# Adathalaz konfiguráció (Roboflow YOLO formátum)
-# Töltsd le a saját Roboflow export után és cseréld ki az útvonalakat!
+# Adathalmaz konfiguráció – végleges 9 osztályos struktúra
+# Ez a fájl a dataset/data.yaml referencia-másolata.
+# A tényleges tréninghez használd a prepare_dataset.py által generált dataset/data.yaml-t.
 
-path: D:/YOLO training/data   # gyökérmappa
+path: D:/YOLO training/dataset   # gyökérmappa (prepare_dataset.py kimenete)
 
 train: images/train
 val: images/val
 
-# Osztályok - módosítsd saját igény szerint
-nc: 4
+# Osztályok (9 db)
+nc: 9
 names:
-  0: car
-  1: truck
-  2: bus
-  3: person
+  0: person              # COCO alap
+  1: bicycle             # COCO alap
+  2: car                 # COCO alap
+  3: motorcycle          # COCO alap
+  4: bus_solo            # Egyedi – szóló busz
+  5: bus_articulated     # Egyedi – csuklós busz
+  6: truck_light         # Egyedi – kisteher, furgon (< 3.5t)
+  7: truck_heavy         # Egyedi – merev felépítményű teherautó
+  8: vehicle_combination # Egyedi – nyerges vontatós, pótkocsis szerelvény
