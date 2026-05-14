@@ -2,28 +2,42 @@
 """
 Frame Extractor for YOLO Training Data
 =======================================
-Videókból kinyeri a bus/truck detektálásokat YOLO track() segítségével.
-Headless mód (nincs cv2.imshow), tqdm progress bar a konzolon.
+Videókból kinyeri a kívánt kategóriájú objektumok legjobb frame-jeit
+YOLO track() segítségével. Headless mód (nincs cv2.imshow), tqdm progress bar.
 
 Működés:
   1. Betölti a meglévő traffic YOLO modellt
-  2. Végigmegy a videó frame-jein, tracked() segítségével nyomon követi az obj.
-  3. Minden bus/truck ID-hoz eltárolja a legjobb pozíciót (konfidencia × képközeli)
+  2. Végigmegy a videó frame-jein, track()-kal nyomon követi az objektumokat
+  3. Minden trigger-objektum ID-hoz eltárolja a legjobb pozíciót
+     (konfidencia × képközeli súlyozással)
   4. Ha az ID eltűnik (v. videó végére ér): menti a képet + YOLO .txt-t
-  5. Az összes detektált objektum belekerül a .txt-be (teljes annotáció)
-  6. Egy ID-ról max. 1 (--max_per_id) kép készül → duplikáció szűrés
+  5. Az összes detektált objektum belekerül a .txt-be (teljes annotáció!)
+  6. Egy ID-ról max. --max_per_id kép készül → duplikáció szűrés
 
-Kimenet:
+Trigger osztályok:
+  --triggers  vesszővel elválasztott osztálynevek a modellből
+              Ha nincs megadva → MINDEN osztály trigger lesz
+
+Kimenet (egy mappa triggerenként):
   training_data/raw/
-    bus/    ← bus kivált képek + .txt + .json (metaadat)
-    truck/  ← truck kivált képek + .txt + .json
+    person/
+    car/
+    bus/       ← review fogja bus_solo / bus_articulated-ra bontani
+    truck/     ← review fogja truck_light / truck_heavy / vehicle_combination-ra bontani
+    ...
 
 Következő lépés:
   python scripts/review_annotations.py --source training_data/raw
 
 Használat:
+  # Minden osztály gyűjtése:
   python scripts/extract_frames.py --video D:/videos --model weights/best.pt
-  python scripts/extract_frames.py --video D:/videos/traffic.mp4 --model weights/best.pt --max_per_id 2 --frame_skip 3
+
+  # Csak bus és truck:
+  python scripts/extract_frames.py --video D:/videos --model weights/best.pt --triggers bus,truck
+
+  # Minden osztály, több kép/jármű, minden 3. frame:
+  python scripts/extract_frames.py --video D:/videos --model weights/best.pt --max_per_id 3 --frame_skip 3
 """
 
 import argparse
@@ -37,85 +51,56 @@ from tqdm import tqdm
 from ultralytics import YOLO
 
 
-# ── Osztályok (célmodell, 0–8) ────────────────────────────────────────────────
-
-CLASS_NAMES_NEW = [
-    "person",               # 0
-    "bicycle",              # 1
-    "car",                  # 2
-    "motorcycle",           # 3
-    "bus_solo",             # 4  ← placeholder (bus → review javítja)
-    "bus_articulated",      # 5
-    "truck_light",          # 6
-    "truck_heavy",          # 7  ← placeholder (truck → review javítja)
-    "vehicle_combination",  # 8
-]
-
-# Régi modell osztálynév (normalizált) → új class ID
-OLD_NAME_TO_NEW: dict[str, int] = {
-    "person":     0,
-    "bicycle":    1,
-    "bike":       1,
-    "car":        2,
-    "motorcycle": 3,
-    "motorbike":  3,
-    "bus":        4,   # placeholder → bus_solo, review fogja javítani
-    "truck":      7,   # placeholder → truck_heavy, review fogja javítani
-}
-
-# Trigger osztályok: ha ilyen van a frame-ben → mentés
-# kulcs: régi modell osztálynév (normalizált részstring)
-# érték: (kimeneti mappa neve, placeholder new class ID)
-TRIGGER_PATTERNS: dict[str, tuple[str, int]] = {
-    "bus":   ("bus",   4),
-    "truck": ("truck", 7),
-}
+# ── Osztályok ────────────────────────────────────────────────────────────────
+# A modell saját names listáját használjuk (nincs hardcoded átindexelés).
+# A kimeneti .txt osztály-ID-k megegyeznek a forrásmodell ID-jaival.
+# A review_annotations.py fogja elvégezni a bus/truck alkategóriába sorolást.
 
 VIDEO_EXTS = {".mp4", ".avi", ".mov", ".mkv", ".mts", ".m2ts", ".wmv", ".ts"}
 
 
-# ── Osztálytérkép automatikus felépítése ──────────────────────────────────────
+# ── Trigger lista felépítése ─────────────────────────────────────────────────
 
-def build_remap(
+def build_triggers(
     model_names: dict[int, str],
-) -> tuple[dict[int, int], dict[int, tuple[str, int]]]:
+    requested: list[str] | None,
+) -> dict[int, str]:
     """
-    model.names alapján felépíti:
-      remap:    {old_id → new_id}        – minden felismert osztályra
-      triggers: {old_id → (folder, placeholder_new_id)} – csak trigger osztályokra
+    Visszaad egy {model_class_id → folder_name} szótárt.
+
+    Ha requested üres/None → minden modell-osztály trigger lesz.
+    Ha requested meg van adva → csak azok, amik részstringjük megegyezik.
+
+    A folder_name = modell osztályneve (kisbetűs, szóköz → _).
+    Pl. model_names[5]='Bus' → folder='bus'
     """
-    remap: dict[int, int] = {}
-    triggers: dict[int, tuple[str, int]] = {}
+    triggers: dict[int, str] = {}
 
-    print("\n[MODELL] Osztályok felismerése:")
-    for old_id, name in sorted(model_names.items()):
-        norm = name.lower().strip()
-        matched = False
+    print("\n[MODELL] Elérhető osztályok:")
+    for cls_id, name in sorted(model_names.items()):
+        norm = name.lower().replace(" ", "_")
+        folder = norm
 
-        for pattern, (folder, pholder) in TRIGGER_PATTERNS.items():
-            if pattern in norm:
-                remap[old_id] = pholder
-                triggers[old_id] = (folder, pholder)
-                print(f"  [{old_id:>3}] {name:<18} → TRIGGER → '{folder}/'  (placeholder={pholder})")
-                matched = True
-                break
+        if requested:
+            # Részstring egyezés: 'bus' illeszkedik 'city_bus'-ra is
+            matched = any(req in norm or norm in req for req in requested)
+        else:
+            matched = True  # minden osztály trigger
 
-        if not matched:
-            new_id = OLD_NAME_TO_NEW.get(norm)
-            if new_id is not None:
-                remap[old_id] = new_id
-                print(f"  [{old_id:>3}] {name:<18} → [{new_id}] {CLASS_NAMES_NEW[new_id]}")
+        if matched:
+            triggers[cls_id] = folder
+            print(f"  [{cls_id:>3}] {name:<20}  →  TRIGGER  → '{folder}/'")
+        else:
+            print(f"  [{cls_id:>3}] {name:<20}  →  kihagyva")
 
     if not triggers:
-        print("\n[HIBA] Nem található trigger osztály (bus/truck) a modellben!")
+        print("\n[HIBA] Egyetlen trigger osztály sem maradt!")
+        print(f"  Kért osztályok: {requested}")
         print(f"  Modell osztályok: {list(model_names.values())}")
         sys.exit(1)
 
-    unmapped = [name for old_id, name in model_names.items() if old_id not in remap]
-    if unmapped:
-        print(f"  [FIGYELEM] Nem leképezett osztályok (kihagyva): {unmapped}")
-
-    return remap, triggers
+    print(f"\n[OK] {len(triggers)} trigger aktív.")
+    return triggers
 
 
 # ── Kép + annotáció mentése ───────────────────────────────────────────────────
@@ -148,11 +133,10 @@ def save_best_frame(
     with open(out / f"{stem}.json", "w", encoding="utf-8") as f:
         json.dump(
             {
-                "obj_id":            rec["obj_id"],
-                "trigger_old_cls":   rec["old_cls"],
-                "placeholder_new_id": rec["pholder"],
-                "folder":            rec["folder"],
-                "best_score":        round(rec["best_score"], 4),
+                "obj_id":      rec["obj_id"],
+                "trigger_cls": rec["trigger_cls"],
+                "folder":      rec["folder"],
+                "best_score":  round(rec["best_score"], 4),
             },
             f,
             indent=2,
@@ -164,8 +148,7 @@ def save_best_frame(
 def process_video(
     video_path: Path,
     model: YOLO,
-    remap: dict[int, int],
-    triggers: dict[int, tuple[str, int]],
+    triggers: dict[int, str],
     output_dir: Path,
     max_per_id: int,
     frame_skip: int,
@@ -227,12 +210,11 @@ def process_video(
             confs = boxes.conf.float().cpu().tolist()
             xywhn = boxes.xywhn.float().cpu().tolist()  # [cx, cy, w, h] normalizálva
 
-            # Összes jelen lévő box átindexelve
-            all_boxes: list[tuple] = []
-            for oid, cls, cf, (cx, cy, bw, bh) in zip(ids, clss, confs, xywhn):
-                new_cls = remap.get(cls)
-                if new_cls is not None:
-                    all_boxes.append((new_cls, cx, cy, bw, bh, cf))
+            # Összes jelen lévő box (modell eredeti ID-kkal – nincs átindexelés)
+            all_boxes: list[tuple] = [
+                (cls, cx, cy, bw, bh, cf)
+                for cls, cf, (cx, cy, bw, bh) in zip(clss, confs, xywhn)
+            ]
 
             # Trigger objektumok frissítése
             for oid, cls, cf, (cx, cy, bw, bh) in zip(ids, clss, confs, xywhn):
@@ -245,12 +227,11 @@ def process_video(
                 score = cf * 0.7 + max(0.0, 1.0 - dist * 2.0) * 0.3
 
                 if oid not in tracked:
-                    folder, pholder = triggers[cls]
+                    folder = triggers[cls]
                     tracked[oid] = {
                         "obj_id":     oid,
-                        "old_cls":    cls,
+                        "trigger_cls": cls,
                         "folder":     folder,
-                        "pholder":    pholder,
                         "best_score": -1.0,
                         "best_frame": None,
                         "best_boxes": [],
@@ -294,18 +275,30 @@ def process_video(
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Frame Extractor – bus/truck képek kinyerése videókból YOLO track()-kal",
+        description="Frame Extractor – képek kinyerése videókból YOLO track()-kal (bármely kategória)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Példák:
+  # Minden osztály gyűjtése (alapértelmezett):
   python scripts/extract_frames.py --video D:/videos --model weights/best.pt
-  python scripts/extract_frames.py --video D:/videos/cam1.mp4 --model weights/best.pt --max_per_id 2
+
+  # Csak bus és truck:
+  python scripts/extract_frames.py --video D:/videos --model weights/best.pt --triggers bus,truck
+
+  # Minden osztály, 3 kép/jármű, minden 3. frame:
+  python scripts/extract_frames.py --video D:/videos --model weights/best.pt --max_per_id 3 --frame_skip 3
+
+  # Csak person és car, CPU-n:
+  python scripts/extract_frames.py --video D:/videos --model weights/best.pt --triggers person,car --device cpu
         """,
     )
     p.add_argument("--video", type=Path, required=True,
                    help="Videó fájl vagy videókat tartalmazó mappa (rekurzív)")
     p.add_argument("--model", type=Path, required=True,
                    help="Meglévő traffic YOLO modell súlyok (.pt)")
+    p.add_argument("--triggers", type=str, default=None,
+                   help="Vesszővel elválasztott trigger osztályok (pl. 'bus,truck,car'). "
+                        "Ha nincs megadva → MINDEN osztály trigger lesz.")
     p.add_argument("--output", type=Path, default=Path("training_data/raw"),
                    help="Kimeneti mappa (alapért.: training_data/raw)")
     p.add_argument("--max_per_id", type=int, default=1,
@@ -333,7 +326,11 @@ def main() -> None:
     print(f"[MODELL] Betöltés: {args.model}")
     model = YOLO(str(args.model))
 
-    remap, triggers = build_remap(model.names)
+    requested = (
+        [t.strip().lower().replace(" ", "_") for t in args.triggers.split(",")]
+        if args.triggers else None
+    )
+    triggers = build_triggers(model.names, requested)
 
     # Videók összegyűjtése
     if args.video.is_dir():
@@ -355,7 +352,7 @@ def main() -> None:
     total_saved = 0
     for v in videos:
         total_saved += process_video(
-            v, model, remap, triggers,
+            v, model, triggers,
             args.output, args.max_per_id, args.frame_skip,
             args.conf, args.iou,
         )
