@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.pyo
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# YOLO / Ultralytics kimenet
+runs/
+*.pt
+*.onnx
+*.engine
+*.torchscript
+
+# Dataset képek és labelek (Roboflow exportból)
+data/images/
+data/labels/
+datasets/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Secrets
+*.env
+.env

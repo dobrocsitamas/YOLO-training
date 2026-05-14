@@ -1,0 +1,15 @@
+# Adathalaz konfiguráció (Roboflow YOLO formátum)
+# Töltsd le a saját Roboflow export után és cseréld ki az útvonalakat!
+
+path: D:/YOLO training/data   # gyökérmappa
+
+train: images/train
+val: images/val
+
+# Osztályok - módosítsd saját igény szerint
+nc: 4
+names:
+  0: car
+  1: truck
+  2: bus
+  3: person
