@@ -17,10 +17,11 @@ runs/
 *.engine
 *.torchscript
 
-# Dataset képek és labelek (Roboflow exportból)
-data/images/
-data/labels/
+# Adathalmazok – képek, labelek, nyers export (soha nem kerül git-be)
+data/
+dataset/
 datasets/
+training_data/
 
 # Jupyter
 .ipynb_checkpoints/
