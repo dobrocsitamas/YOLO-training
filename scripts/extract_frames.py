@@ -166,7 +166,7 @@ def process_video(
     # Tracker állapot resetelése az új videóhoz
     if hasattr(model, "predictor") and model.predictor is not None:
         try:
-            model.predictor.trackers = []
+            model.predictor = None
         except Exception:
             pass
 
