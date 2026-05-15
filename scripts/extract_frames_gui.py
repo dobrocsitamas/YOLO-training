@@ -170,6 +170,7 @@ class App(tk.Tk):
         self._frame_skip_var = tk.IntVar(value=5)
         self._max_per_id_var = tk.IntVar(value=1)
         self._conf_var       = tk.DoubleVar(value=0.35)
+        self._min_motion_var = tk.DoubleVar(value=0.04)
         self._device_var     = tk.StringVar(value="0")
 
         self._add_spin(param_frame, 0, 0, "Frame skip:",
@@ -178,11 +179,13 @@ class App(tk.Tk):
                        self._max_per_id_var, 1, 10)
         self._add_spin_float(param_frame, 1, 0, "Konfidencia küszöb:",
                              self._conf_var, 0.1, 0.9, 0.05)
+        self._add_spin_float(param_frame, 1, 3, "Min. mozgás (0–1):",
+                             self._min_motion_var, 0.0, 0.5, 0.01)
 
         ttk.Label(param_frame, text="Eszköz:").grid(
-            row=1, column=3, sticky="e", padx=(20, 4))
+            row=2, column=0, sticky="e", padx=(0, 4))
         dev_inner = ttk.Frame(param_frame)
-        dev_inner.grid(row=1, column=4, sticky="w")
+        dev_inner.grid(row=2, column=1, sticky="w")
         ttk.Radiobutton(dev_inner, text="GPU (0)", variable=self._device_var,
                         value="0").pack(side="left")
         ttk.Radiobutton(dev_inner, text="CPU", variable=self._device_var,
@@ -374,6 +377,7 @@ class App(tk.Tk):
                 "--frame_skip", str(self._frame_skip_var.get()),
                 "--max_per_id", str(self._max_per_id_var.get()),
                 "--conf",       f"{self._conf_var.get():.2f}",
+                "--min_motion", f"{self._min_motion_var.get():.2f}",
                 "--device",     self._device_var.get(),
                 "--quiet",
             ]
