@@ -94,3 +94,72 @@ cd "D:\YOLO training"
 - [ ] Export TensorRT-re (Jetson Nano)
 
 ---
+
+## 2026-05-15
+
+### Elvégzett munka
+
+**Cél:** Osztálystruktúra bővítése 9 → 13 osztályra, teljes manuális képfelülvizsgálat megvalósítása, inkrementális dataset-bővítés támogatása.
+
+**Osztálystruktúra** (új, 13 osztály):
+| ID | Osztály | Megjegyzés |
+|----|---------|-----------|
+| 0 | person | COCO alaposztály |
+| 1 | bicycle | COCO alaposztály |
+| 2 | motorcycle | COCO alaposztály (motorkerékpár, robogó) |
+| 3 | personal_car | COCO car → átnevezve |
+| 4 | light_truck | kisteherautó, furgon (< 3.5t) |
+| 5 | medium_truck | közepes teherjármű (3.5–12t) |
+| 6 | heavy_truck | nehéz teherjármű (> 12t, merev) |
+| 7 | vehicle_combination | nyerges vontatós / pótkocsis szerelvény |
+| 8 | bus_solo | szóló autóbusz |
+| 9 | bus_articulated | csuklós autóbusz |
+| 10 | trolley_solo | szóló trolibusz |
+| 11 | trolley_articulated | csuklós trolibusz |
+| 12 | tram | villamos |
+
+**Elkészült / módosított fájlok:**
+
+- `scripts/review_annotations.py` – **teljes újraírás**
+  - Minden kategória megjelenik (nem csak bus/truck)
+  - **Inkrementális logika:** a `Training_pictures_reviewed/` mappában már szereplő fájlneveket kihagyja → újabb videók feldolgozása után csak az új képeket mutatja
+  - **Gyors jóváhagyás `[O]`**: egyszerű osztályoknál (person/bicycle/motorcycle/car) azonnal menti az alapértelmezett osztállyal
+  - **Kötelező manuális választás**: bus/truck esetén az `[O]` le van tiltva
+  - **13 osztály billentyűi**: `1–9` + `Q` (bus_articulated) + `W` (trolley_solo) + `E` (trolley_articulated) + `R` (tram)
+  - **`[←]` visszavonás**: törli az utolsó kimenetbe mentett fájlokat, visszalép
+  - **COCO ID → új ID remapping**: .txt annotációkban az osztály ID-k automatikusan frissülnek
+  - Alapértelmezett útvonalak: forrás `Training_pictures/`, kimenet `Training_pictures_reviewed/`
+
+- `configs/dataset.yaml` – frissítve 13 osztályra
+
+**Munkafolyamat (inkrementális bővítés):**
+1. `extract_frames_gui.py` → új képek gyűjtése `Training_pictures/`-be
+2. `review_annotations.py` → **csak az új, még nem ellenőrzött képek** jelennek meg
+3. `prepare_dataset.py --custom_root Training_pictures_reviewed` → dataset összerakás
+
+**Környezet (asztali PC):**
+- Python 3.11.9, venv: `C:\Users\admin\Trafic_mojo_2\YOLO-training\.venv`
+- NVIDIA RTX 5060 (8GB VRAM), driver 595.79, CUDA 12.8
+- torch 2.11.0+cu128, ultralytics 8.4.51, opencv-python 4.13.0, Pillow 12.2.0
+- Modell: `C:\Users\admin\Trafic_mojo_2\TM_modulok_py\Traffic_Mojo_2_0\yolo11s.pt`
+- Videók: `C:\Users\admin\Trafic_mojo_2\Video\` (3 nagy ~36GB + `Teszt videók\` 8 kisebb klip)
+- Gyűjtött képek: `C:\Users\admin\Trafic_mojo_2\Training_pictures\`
+
+**Futtatás:**
+```powershell
+cd "C:\Users\admin\Trafic_mojo_2\YOLO-training"
+.venv\Scripts\python.exe scripts/review_annotations.py
+# vagy egyedi útvonalakkal:
+.venv\Scripts\python.exe scripts/review_annotations.py `
+  --source "C:\Users\admin\Trafic_mojo_2\Training_pictures" `
+  --output "C:\Users\admin\Trafic_mojo_2\Training_pictures_reviewed"
+```
+
+### Függőben lévő feladatok
+- [ ] review_annotations.py tesztelése valós képekkel
+- [ ] prepare_dataset.py ellenőrzése az új 13 osztályos mappastruktúrával
+- [ ] Képgyűjtés folytatása a nagy videókból
+- [ ] train.py futtatása összegyűlt és felülvizsgált adaton
+- [ ] Export TensorRT-re (Jetson Nano)
+
+---
