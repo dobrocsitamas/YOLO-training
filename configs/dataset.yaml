@@ -1,4 +1,4 @@
-# Adathalmaz konfiguráció – végleges 9 osztályos struktúra
+# Adathalmaz konfiguráció – 13 osztályos struktúra
 # Ez a fájl a dataset/data.yaml referencia-másolata.
 # A tényleges tréninghez használd a prepare_dataset.py által generált dataset/data.yaml-t.
 
@@ -7,15 +7,19 @@ path: D:/YOLO training/dataset   # gyökérmappa (prepare_dataset.py kimenete)
 train: images/train
 val: images/val
 
-# Osztályok (9 db)
-nc: 9
+# Osztályok (13 db)
+nc: 13
 names:
-  0: person              # COCO alap
-  1: bicycle             # COCO alap
-  2: car                 # COCO alap
-  3: motorcycle          # COCO alap
-  4: bus_solo            # Egyedi – szóló busz
-  5: bus_articulated     # Egyedi – csuklós busz
-  6: truck_light         # Egyedi – kisteher, furgon (< 3.5t)
-  7: truck_heavy         # Egyedi – merev felépítményű teherautó
-  8: vehicle_combination # Egyedi – nyerges vontatós, pótkocsis szerelvény
+  0: person              # gyalogos
+  1: bicycle             # kerékpár
+  2: motorcycle          # motorkerékpár, robogó
+  3: personal_car        # személyautó (COCO: car)
+  4: light_truck         # kisteherautó, furgon (< 3.5t)
+  5: medium_truck        # közepes teherjármű (3.5–12t)
+  6: heavy_truck         # nehéz teherjármű (> 12t, merev)
+  7: vehicle_combination # nyerges vontatós / pótkocsis szerelvény
+  8: bus_solo            # szóló autóbusz
+  9: bus_articulated     # csuklós autóbusz
+  10: trolley_solo       # szóló trolibusz
+  11: trolley_articulated # csuklós trolibusz
+  12: tram               # villamos
