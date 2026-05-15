@@ -64,6 +64,7 @@ VIDEO_EXTS = {".mp4", ".avi", ".mov", ".mkv", ".mts", ".m2ts", ".wmv", ".ts"}
 def build_triggers(
     model_names: dict[int, str],
     requested: list[str] | None,
+    quiet: bool = False,
 ) -> dict[int, str]:
     """
     Visszaad egy {model_class_id → folder_name} szótárt.
@@ -76,30 +77,26 @@ def build_triggers(
     """
     triggers: dict[int, str] = {}
 
-    print("\n[MODELL] Elérhető osztályok:")
     for cls_id, name in sorted(model_names.items()):
         norm = name.lower().replace(" ", "_")
         folder = norm
 
         if requested:
-            # Részstring egyezés: 'bus' illeszkedik 'city_bus'-ra is
             matched = any(req in norm or norm in req for req in requested)
         else:
-            matched = True  # minden osztály trigger
+            matched = True
 
         if matched:
             triggers[cls_id] = folder
-            print(f"  [{cls_id:>3}] {name:<20}  →  TRIGGER  → '{folder}/'")
-        else:
-            print(f"  [{cls_id:>3}] {name:<20}  →  kihagyva")
 
     if not triggers:
-        print("\n[HIBA] Egyetlen trigger osztály sem maradt!")
+        print("[HIBA] Egyetlen trigger osztály sem maradt!")
         print(f"  Kért osztályok: {requested}")
         print(f"  Modell osztályok: {list(model_names.values())}")
         sys.exit(1)
 
-    print(f"\n[OK] {len(triggers)} trigger aktív.")
+    if not quiet:
+        print(f"[OK] Aktív triggerek: {', '.join(triggers.values())}")
     return triggers
 
 
@@ -154,7 +151,8 @@ def process_video(
     frame_skip: int,
     conf_thr: float,
     iou_thr: float,
-) -> int:
+    min_motion: float = 0.04,
+) -> tuple[int, dict[str, int]]:
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         print(f"[HIBA] Nem nyitható: {video_path.name}")
@@ -172,6 +170,8 @@ def process_video(
 
     tracked: dict[int, dict] = {}
     saved = 0
+    skipped_stationary = 0
+    saved_by_cls: dict[str, int] = {}
     fi = 0
 
     pbar = tqdm(
@@ -179,7 +179,7 @@ def process_video(
         desc=f"{video_path.name[:38]}",
         unit="f",
         dynamic_ncols=True,
-        colour="cyan",
+        colour=None,
     )
 
     while True:
@@ -229,33 +229,46 @@ def process_video(
                 if oid not in tracked:
                     folder = triggers[cls]
                     tracked[oid] = {
-                        "obj_id":     oid,
+                        "obj_id":      oid,
                         "trigger_cls": cls,
-                        "folder":     folder,
-                        "best_score": -1.0,
-                        "best_frame": None,
-                        "best_boxes": [],
-                        "saved":      0,
+                        "folder":      folder,
+                        "best_score":  -1.0,
+                        "best_frame":  None,
+                        "best_boxes":  [],
+                        "saved":       0,
+                        "first_pos":   (cx, cy),   # első észlelt pozíció
+                        "max_disp":    0.0,         # max elmozdulás az első pozíciótól
                     }
 
                 rec = tracked[oid]
                 if rec["saved"] >= max_per_id:
                     continue
 
+                # Elmozdulás követése
+                dx = cx - rec["first_pos"][0]
+                dy = cy - rec["first_pos"][1]
+                disp = math.sqrt(dx * dx + dy * dy)
+                if disp > rec["max_disp"]:
+                    rec["max_disp"] = disp
+
                 if score > rec["best_score"]:
                     rec["best_score"] = score
                     rec["best_frame"] = frame.copy()
                     rec["best_boxes"] = list(all_boxes)
 
-        # Eltűnt ID-k → mentés
+        # Eltűnt ID-k → mentés (csak ha eleget mozgott)
         gone = set(tracked.keys()) - current_ids
         for oid in list(gone):
             rec = tracked[oid]
             if rec["saved"] < max_per_id and rec["best_frame"] is not None:
-                save_best_frame(rec, stem, fi, output_dir)
-                rec["saved"] += 1
-                saved += 1
-                pbar.set_postfix(mentve=saved)
+                if rec["max_disp"] >= min_motion:
+                    save_best_frame(rec, stem, fi, output_dir)
+                    rec["saved"] += 1
+                    saved += 1
+                    saved_by_cls[rec["folder"]] = saved_by_cls.get(rec["folder"], 0) + 1
+                    pbar.set_postfix(mentve=saved)
+                else:
+                    skipped_stationary += 1
             del tracked[oid]
 
     pbar.close()
@@ -264,11 +277,18 @@ def process_video(
     # Videó vége: maradék tracker ID-k mentése
     for oid, rec in tracked.items():
         if rec["saved"] < max_per_id and rec["best_frame"] is not None:
-            save_best_frame(rec, stem, fi, output_dir)
-            saved += 1
+            if rec["max_disp"] >= min_motion:
+                save_best_frame(rec, stem, fi, output_dir)
+                saved += 1
+                saved_by_cls[rec["folder"]] = saved_by_cls.get(rec["folder"], 0) + 1
+            else:
+                skipped_stationary += 1
 
-    print(f"  → {saved} kép mentve | {video_path.name}")
-    return saved
+    print(f"  \u2192 {saved} kép mentve | {video_path.name} (mozgás alatt: {skipped_stationary} álló kihagyva)")
+    cls_info = "  ".join(f"{k}: {v}" for k, v in sorted(saved_by_cls.items()))
+    if cls_info:
+        print(f"    {cls_info}")
+    return saved, saved_by_cls
 
 
 # ── Argumentumok ──────────────────────────────────────────────────────────────
@@ -311,6 +331,11 @@ Példák:
                    help="IoU küszöb (alapért.: 0.50)")
     p.add_argument("--device", type=str, default="0",
                    help="Feldolgozó eszköz: '0' = GPU, 'cpu' (alapért.: 0)")
+    p.add_argument("--min_motion", type=float, default=0.04,
+                   help="Minimális elmozdulás képmerethez viszonyítva (0–1, alapért.: 0.04). "
+                        "Ez szűri ki a piroslámpán várakozó járműveket.")
+    p.add_argument("--quiet", action="store_true",
+                   help="Osztálylista és részletes modell-info elnyomása")
     return p.parse_args()
 
 
@@ -323,14 +348,15 @@ def main() -> None:
         print(f"[HIBA] Modell nem található: {args.model}")
         sys.exit(1)
 
-    print(f"[MODELL] Betöltés: {args.model}")
+    if not args.quiet:
+        print(f"[MODELL] Betöltés: {args.model}")
     model = YOLO(str(args.model))
 
     requested = (
         [t.strip().lower().replace(" ", "_") for t in args.triggers.split(",")]
         if args.triggers else None
     )
-    triggers = build_triggers(model.names, requested)
+    triggers = build_triggers(model.names, requested, quiet=args.quiet)
 
     # Videók összegyűjtése
     if args.video.is_dir():
@@ -347,17 +373,24 @@ def main() -> None:
         print(f"[HIBA] Nem találhatók videók ({', '.join(VIDEO_EXTS)}): {args.video}")
         sys.exit(1)
 
-    print(f"\n[OK] {len(videos)} videó feldolgozása → {args.output}\n")
+    if not args.quiet:
+        print(f"\n[OK] {len(videos)} videó feldolgozása → {args.output}\n")
 
     total_saved = 0
+    total_by_cls: dict[str, int] = {}
     for v in videos:
-        total_saved += process_video(
+        n, by_cls = process_video(
             v, model, triggers,
             args.output, args.max_per_id, args.frame_skip,
-            args.conf, args.iou,
+            args.conf, args.iou, args.min_motion,
         )
+        total_saved += n
+        for cls, cnt in by_cls.items():
+            total_by_cls[cls] = total_by_cls.get(cls, 0) + cnt
 
     print(f"\n[KÉSZ] Összes mentett kép: {total_saved}")
+    for cls in sorted(total_by_cls):
+        print(f"       {cls:<22} {total_by_cls[cls]:>5} kép")
     print(f"       Kimenet: {args.output.resolve()}")
     print(f"       Következő: python scripts/review_annotations.py --source {args.output}")
 

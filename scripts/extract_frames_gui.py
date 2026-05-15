@@ -8,12 +8,15 @@ Indítás:
 """
 
 import os
+import re
 import subprocess
 import sys
 import threading
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, font, scrolledtext, ttk
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]|\x1b[\[\]()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><~]")
 
 import cv2
 
@@ -158,7 +161,7 @@ class App(tk.Tk):
             var = tk.BooleanVar(value=(cls in DEFAULT_TRIGGERS))
             self._cls_vars[cls] = var
             ttk.Checkbutton(cls_frame, text=cls, variable=var).grid(
-                row=i // 4, column=i % 4, sticky="w", padx=12, pady=2)
+                row=0, column=i, sticky="w", padx=12, pady=2)
 
         # ── Paraméterek ───────────────────────────────────────────────────────
         param_frame = ttk.LabelFrame(self, text="Paraméterek", padding=8)
@@ -339,6 +342,11 @@ class App(tk.Tk):
         script = Path(__file__).parent / "extract_frames.py"
         python = sys.executable
 
+        # Log törlése új futás előtt
+        self._log.config(state="normal")
+        self._log.delete("1.0", "end")
+        self._log.config(state="disabled")
+
         self._log_write("─" * 60 + "\n")
         self._log_write(f"[INFO] {len(checked)} videó feldolgozása\n\n")
 
@@ -367,6 +375,7 @@ class App(tk.Tk):
                 "--max_per_id", str(self._max_per_id_var.get()),
                 "--conf",       f"{self._conf_var.get():.2f}",
                 "--device",     self._device_var.get(),
+                "--quiet",
             ]
             self._log_write(f"▶ {Path(video).name}\n")
             self._run_one(cmd)
@@ -390,16 +399,33 @@ class App(tk.Tk):
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
                 env=env,
             )
-            for line in self._process.stdout:
-                self._log_write(line)
+            # Bájtonként olvassuk, hogy a \r (tqdm progress) helyesen kezelje
+            buf = b""
+            for chunk in iter(lambda: self._process.stdout.read(128), b""):
+                buf += chunk
+                while True:
+                    nl = buf.find(b"\n")
+                    cr = buf.find(b"\r")
+                    if nl == -1 and cr == -1:
+                        break
+                    if nl != -1 and (cr == -1 or nl < cr):
+                        # normál sor
+                        line = buf[:nl + 1].decode("utf-8", errors="replace")
+                        buf = buf[nl + 1:]
+                        self._log_append(_ANSI_RE.sub("", line), overwrite=False)
+                    else:
+                        # \r → felülírjuk az utolsó sort
+                        line = buf[:cr].decode("utf-8", errors="replace")
+                        buf = buf[cr + 1:]
+                        if line:
+                            self._log_append(_ANSI_RE.sub("", line), overwrite=True)
+            if buf:
+                self._log_append(_ANSI_RE.sub("", buf.decode("utf-8", errors="replace")), overwrite=False)
             self._process.wait()
         except Exception as e:
-            self._log_write(f"[KIVÉTEL] {e}\n", "red")
+            self._log_append(f"[KIVÉTEL] {e}\n", overwrite=False)
 
     def _stop(self):
         self._running = False
@@ -412,21 +438,37 @@ class App(tk.Tk):
         self._start_btn.config(state="normal")
         self._stop_btn.config(state="disabled")
 
-    # ── Log írás (szálbiztos, nincs auto-scroll) ──────────────────────────────
+    # ── Log írás (szálbiztos) ────────────────────────────────────────────────
 
-    def _log_write(self, text: str, color: str | None = None):
+    def _log_append(self, text: str, overwrite: bool = False, color: str | None = None):
+        """Szálbiztos log írás. overwrite=True esetén felülírja az utolsó sort (\r)."""
         colors = {"red": "#f48771", "green": "#89d185", "yellow": "#dcdcaa"}
 
         def _do():
             self._log.config(state="normal")
-            if color and color in colors:
-                tag = f"col_{color}"
-                self._log.tag_config(tag, foreground=colors[color])
-                self._log.insert("end", text, tag)
+            if overwrite:
+                # Utolsó sor törlése (tqdm progress felülírás)
+                self._log.delete("end-1l linestart", "end-1l lineend")
+                self._log.insert("end-1l linestart", text)
             else:
-                self._log.insert("end", text)
+                if color and color in colors:
+                    tag = f"col_{color}"
+                    self._log.tag_config(tag, foreground=colors[color])
+                    self._log.insert("end", text, tag)
+                else:
+                    self._log.insert("end", text)
+            # Auto-scroll ha a néző már lent van (utolsó 5%-ban)
+            try:
+                pos = self._log.yview()
+                if pos[1] >= 0.95:
+                    self._log.see("end")
+            except Exception:
+                pass
             self._log.config(state="disabled")
         self.after(0, _do)
+
+    def _log_write(self, text: str, color: str | None = None):
+        self._log_append(text, overwrite=False, color=color)
 
 
 # ── Belépési pont ─────────────────────────────────────────────────────────────
