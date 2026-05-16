@@ -231,3 +231,84 @@ A Desktop feldolgozó és a Jetson mérőprogramja nem foglalkozik tréningadat-
 4. `train.py` – első tréning futtatás
 
 ---
+
+## 2026-05-16 (folytatás) – Célzott képgyűjtés, augmentáció, 14 osztályos séma
+
+### Második képgyűjtési kör – eredmény
+
+Célzott gyűjtés prioritás szerint (motorcycle, bicycle, bus, truck, train).
+Eredmény a `Training_pictures/` mappában:
+
+| Kategória | Előző | Most   | Változás |
+|-----------|-------|--------|----------|
+| truck     | 1 971 | 7 469  | +5 498   |
+| bus       | 1 392 | 2 879  | +1 487   |
+| bicycle   | 63    | 226    | +163     |
+| motorcycle| 10    | 59     | +49      |
+| train     | 0     | 16     | +16 (új) |
+| car       | 12 440| 12 440 | —        |
+| person    | 5 463 | 5 463  | —        |
+
+**Megjegyzések:**
+- `motorcycle` és `bicycle` még mindig kevés, de augmentációval kezelhető
+- `train` (villamos) 16 db – minimális, pótlás szükséges ha lesz helyszíni videó
+- `car` 12 440 db – review-nál max 2–3000-et érdemes megtartani az arányok miatt
+- Trolibusz kategória egyelőre nem kerül bele – helyszíni videó szükséges
+
+### Adataugmentáció beállítása (`train.py`)
+
+A YOLO beépített augmentációja fut tréning közben (nem ment fájlt, epoch-onként
+újra generál). Fokozott beállítások a ritka osztályok (bicycle, motorcycle, tram)
+miatt:
+
+```python
+degrees=10.0    # forgatás ±10°
+scale=0.5       # méretezés 50–150%
+shear=2.0       # nyírás ±2°
+fliplr=0.5      # vízszintes tükrözés
+flipud=0.0      # függőleges tükrözés – forgalmi kameránál nem reális
+mosaic=1.0      # 4 képet összevág → kis objektumok többször jelennek meg
+mixup=0.15      # két kép keverése → ritka osztályok előfordulása nő
+copy_paste=0.1  # objektum kivágása és más képre illesztése → bicycle/motorcycle++
+```
+
+Hatás: bicycle/motorcycle esetén ~3–5× több effektív tanítópélda epoch-onként.
+
+### 14 osztályos séma – minibus hozzáadva
+
+**Indoklás:** a mikrobusz (Sprinter Bus, Transit Bus, 9–20 fős) forgalomtechnikai
+szempontból különbözik a nagybusztól és a dobozos kisteherautótól. A YOLO modell
+`bus`-ként detektálja, de review-nál szét kell választani.
+
+**Osztályhatárok:**
+
+| Jármű típus              | Osztály            | ID | Review billentyű |
+|--------------------------|--------------------|----|-----------------|
+| Dobozos furgon, Transit Cargo | `light_truck`  | 4  | `5`             |
+| Mikrobusz, Sprinter Bus  | `minibus`          | 13 | `T` (új)        |
+| Szóló nagybusz (>20 fős) | `bus_solo`         | 8  | `9`             |
+| Csuklós busz             | `bus_articulated`  | 9  | `Q`             |
+
+**Módosított fájlok:**
+
+`configs/dataset.yaml`
+- `nc: 13` → `nc: 14`
+- `light_truck` leírás pontosítva: *furgon, dobozos kisteher (áruszállítás, <3.5t)*
+- `bus_solo` leírás pontosítva: *nagybusz, szóló (>20 fős)*
+- Új osztály: `13: minibus` – *mikrobusz/kisbusz (9–20 fős)*
+
+`scripts/review_annotations.py`
+- `CLASS_NAMES` listába felvéve: `"minibus"` (index 13)
+- `KEY_MAP`-be felvéve: `"t": 13`
+- `CLASS_COLORS`-ba felvéve: `13: "#f9e2af"` (sárga)
+- Súgószöveg frissítve: `1-9 / Q,W,E,R,T → osztályok`
+- Gombsor (`key_labels`) frissítve a `T` billentyűvel
+
+### Következő lépések
+1. `review_annotations.py` futtatása – bus és truck képek manuális osztályozása
+   (figyelj a minibus ↔ light_truck ↔ bus_solo határokra!)
+2. Review közben session-számláló segít nyomon követni az alkategóriák arányát
+3. `prepare_dataset.py` futtatása a reviewed mappán
+4. `train.py` – első tréning futtatás (14 osztály, augmentációval)
+
+---
