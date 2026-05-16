@@ -157,9 +157,77 @@ cd "C:\Users\admin\Trafic_mojo_2\YOLO-training"
 
 ### Függőben lévő feladatok
 - [ ] review_annotations.py tesztelése valós képekkel
-- [ ] prepare_dataset.py ellenőrzése az új 13 osztályos mappastruktúrával
-- [ ] Képgyűjtés folytatása a nagy videókból
+- [ ] review_annotations.py futtatása a Training_pictures mappán
+- [x] prepare_dataset.py ellenőrzése az új 13 osztályos mappastruktúrával
+- [ ] Képgyűjtés folytatása – célzott gyűjtés hiányos kategóriákból
 - [ ] train.py futtatása összegyűlt és felülvizsgált adaton
 - [ ] Export TensorRT-re (Jetson Nano)
+
+---
+
+## 2026-05-16 – Adatminőség ellenőrzés, pipeline tisztázás, GUI fejlesztések
+
+### Annotáció ID-k ellenőrzése
+
+Megvizsgáltuk a `Training_pictures/` mappa `.txt` fájljait. Kiderült, hogy az
+`extract_frames.py` **COCO osztály-ID-kat** ment a `.txt` fájlokba (pl. `car=2`,
+`bus=5`, `truck=7`) – ez szándékos, köztes állapot. Az átindexelés a
+`review_annotations.py` feladata (`remap_boxes()` függvény).
+
+**A `training_data/` mappa régebbi formátumú adatokat tartalmaz** (csak 1 objektum /
+kép, osztály mindig `0`). Ezeket egyelőre nem vonjuk be a tréningbe – a minőségi
+különbség (egyobjektumos vs. teljes annotáció) miatt nem éri meg a konvertálás.
+Archívként megmaradnak.
+
+**Döntés:** a képgyűjtő funkciót kizárólag ebben a YOLO-training csomagban tartjuk.
+A Desktop feldolgozó és a Jetson mérőprogramja nem foglalkozik tréningadat-gyűjtéssel
+– ez gyorsítja a mérési algoritmust és egyetlen helyen tartja a logikát.
+
+### Képállomány aktuális állapota (Training_pictures/)
+
+| Kategória | Db    | Megjegyzés                              |
+|-----------|-------|-----------------------------------------|
+| car       | 12440 | ⚠️ Túl sok – review-nál max 2–3000-et megtartani |
+| person    | 5463  | ✓ Elég                                  |
+| truck     | 1971  | ⚡ Elegendő, de alkategóriánként kevés   |
+| bus       | 1392  | ⚠️ Kell még ~1000 kép                   |
+| bicycle   | 63    | 🔴 Kritikusan kevés                     |
+| motorcycle| 10    | 🔴 Kritikusan kevés                     |
+| tram      | 0     | 🔴 Hiányzik – `train` triggerrel gyűjthető |
+| trolley   | 0     | ⏳ Később – helyszíni videó szükséges    |
+
+### Kódváltozások
+
+**`extract_frames_gui.py`**
+- `ALL_CLASSES` listához hozzáadva a `train` osztály → villamost lehet gyűjteni
+  a YOLO11 `train` (COCO ID: 6) detekciójára alapozva
+
+**`review_annotations.py`**
+- `FOLDER_MAP`-be felvéve a `train` mappa: `COCO 6 → kötelező manuális választás`
+  (review-nál `R` = tram/12, `S` = kihagyás ha nem villamos)
+- **Session számláló panel** hozzáadva a jobb oldali panelbe: futás közben
+  osztályonként mutatja a jóváhagyott képek számát. Visszavonásnál helyesen
+  csökkenti a számlálót is. Hasznos truck review-nál: látható mikor van már
+  elég `light_truck` és mikor érdemes azt kihagyni (`S`).
+
+**`start_gui.bat`** *(új fájl)*
+- VS Code-on kívül is indítható launcher a `extract_frames_gui.py`-hoz
+- Python keresési sorrend: venv → .venv → Conda → rendszer Python
+- Hibaüzenet ha Python nem található vagy csomag hiányzik
+
+**`start_gui.ico`** *(új fájl)*
+- Egyedi ikon a launcherhez (film keret + play gomb + autó szilhouett)
+- Desktop parancsikon (`Frame Extractor.lnk`) létrehozva az ikonnal
+
+### Következő lépések
+1. Célzott képgyűjtés új videókból: `motorcycle`, `bicycle`, `bus`, `truck`, `train`
+2. `review_annotations.py` futtatása:
+   ```powershell
+   .venv\Scripts\python.exe scripts/review_annotations.py `
+     --source "C:\Users\admin\Trafic_mojo_2\Training_pictures" `
+     --output "C:\Users\admin\Trafic_mojo_2\Training_pictures_reviewed"
+   ```
+3. `prepare_dataset.py` futtatása a reviewed mappán
+4. `train.py` – első tréning futtatás
 
 ---
