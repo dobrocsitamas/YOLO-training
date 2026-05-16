@@ -66,15 +66,16 @@ CLASS_NAMES: list[str] = [
     "bicycle",             # 1
     "motorcycle",          # 2
     "personal_car",        # 3
-    "light_truck",         # 4
+    "light_truck",         # 4  – furgon, dobozos kisteher (áruszállítás, < 3.5t)
     "medium_truck",        # 5
     "heavy_truck",         # 6
     "vehicle_combination", # 7
-    "bus_solo",            # 8
+    "bus_solo",            # 8  – nagybusz, szóló (>20 fős)
     "bus_articulated",     # 9
     "trolley_solo",        # 10
     "trolley_articulated", # 11
     "tram",                # 12
+    "minibus",             # 13 – mikrobusz / kisbusz (9–20 fős, pl. Sprinter Bus, Transit Bus)
 ]
 
 # Forrásmappa neve → (COCO class ID a .txt-ben, alapértelmezett új class ID vagy None)
@@ -104,6 +105,7 @@ KEY_MAP: dict[str, int] = {
     "w": 10,  # trolley_solo
     "e": 11,  # trolley_articulated
     "r": 12,  # tram
+    "t": 13,  # minibus
 }
 
 # Új osztályok megjelenítési színei (new class ID → hex szín)
@@ -121,6 +123,7 @@ CLASS_COLORS: dict[int, str] = {
     10: "#04a5e5",  # trolley_solo
     11: "#209fb5",  # trolley_articulated
     12: "#7287fd",  # tram
+    13: "#f9e2af",  # minibus
 }
 
 # Forrás .txt fájlok COCO ID-jainak megjelenítési adatai
@@ -354,7 +357,7 @@ class ReviewApp:
         tk.Frame(right, bg="#45475a", height=1).pack(fill="x", pady=6)
         tk.Label(
             right,
-            text="1-9 / Q,W,E,R → osztályok\nO → jóváhagy (egyszerűknél)\nS → kihagyás\n← → visszavonás",
+            text="1-9 / Q,W,E,R,T → osztályok\nO → jóváhagy (egyszerűknél)\nS → kihagyás\n← → visszavonás",
             bg="#1e1e2e", fg="#6c7086",
             font=("Consolas", 7), justify="left",
         ).pack(anchor="w", padx=6)
@@ -375,7 +378,7 @@ class ReviewApp:
     def _build_class_buttons(self) -> None:
         for w in self.btn_frame.winfo_children():
             w.destroy()
-        key_labels = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "Q", "W", "E", "R"]
+        key_labels = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "Q", "W", "E", "R", "T"]
         for i, name in enumerate(CLASS_NAMES):
             key = key_labels[i]
             color = CLASS_COLORS.get(i, "#888888")
