@@ -86,6 +86,7 @@ FOLDER_MAP: dict[str, tuple[int, int | None]] = {
     "car":        (2, 3),    # COCO 2 → new 3 (personal_car)
     "bus":        (5, None), # COCO 5 → kötelező választás
     "truck":      (7, None), # COCO 7 → kötelező választás
+    "train":      (6, None), # COCO 6 → kötelező választás (villamos vagy nem villamos?)
 }
 
 # Gyorsbillentyűk → új class ID
@@ -269,6 +270,10 @@ class ReviewApp:
         # Visszavonás história: minden lépésnél a kimenetbe mentett fájlok listája
         self._history: list[tuple[Path, ...]] = []
 
+        # Session-számlálók: osztálynév → jóváhagyott db száma ebben a futásban
+        self._session_counts: dict[str, int] = {name: 0 for name in CLASS_NAMES}
+        self._session_skipped: int = 0
+
         self.root = tk.Tk()
         self.root.title("Annotáció Átnéző – 13 osztály")
         self.root.configure(bg="#1e1e2e")
@@ -353,6 +358,19 @@ class ReviewApp:
             bg="#1e1e2e", fg="#6c7086",
             font=("Consolas", 7), justify="left",
         ).pack(anchor="w", padx=6)
+
+        tk.Frame(right, bg="#45475a", height=1).pack(fill="x", pady=6)
+        tk.Label(
+            right, text="Session számláló:",
+            bg="#1e1e2e", fg="#a6adc8",
+            font=("Segoe UI", 8, "bold"),
+        ).pack(anchor="w", padx=6)
+        self.lbl_counter = tk.Label(
+            right, text="",
+            bg="#1e1e2e", fg="#cdd6f4",
+            font=("Consolas", 7), justify="left", wraplength=210,
+        )
+        self.lbl_counter.pack(anchor="w", padx=6, pady=(2, 4))
 
     def _build_class_buttons(self) -> None:
         for w in self.btn_frame.winfo_children():
@@ -468,6 +486,8 @@ class ReviewApp:
             saved.append(target_dir / meta_path.name)
 
         self._history.append(tuple(saved))
+        self._session_counts[cls_name] = self._session_counts.get(cls_name, 0) + 1
+        self._refresh_counter()
         self._advance()
 
     def _skip(self) -> None:
@@ -486,6 +506,8 @@ class ReviewApp:
                 saved.append(skip_dir / src.name)
 
         self._history.append(tuple(saved))
+        self._session_skipped += 1
+        self._refresh_counter()
         self._advance()
 
     def _advance(self) -> None:
@@ -507,7 +529,26 @@ class ReviewApp:
                 pass
 
         self.img_idx -= 1
+        # Visszavonásnál csökkentjük a számlálót
+        if last_saved:
+            parent_name = last_saved[0].parent.name
+            if parent_name == "skipped":
+                self._session_skipped = max(0, self._session_skipped - 1)
+            elif parent_name in self._session_counts:
+                self._session_counts[parent_name] = max(0, self._session_counts[parent_name] - 1)
+            self._refresh_counter()
         self._load_current_image()
+
+    def _refresh_counter(self) -> None:
+        """Frissíti a session-számláló feliratot – csak a nem-nulla osztályokat mutatja."""
+        lines = [
+            f"{name}: {count}"
+            for name, count in self._session_counts.items()
+            if count > 0
+        ]
+        if self._session_skipped > 0:
+            lines.append(f"kihagyva: {self._session_skipped}")
+        self.lbl_counter.config(text="\n".join(lines) if lines else "–")
 
     # ── Befejezés ─────────────────────────────────────────────────────────────
 

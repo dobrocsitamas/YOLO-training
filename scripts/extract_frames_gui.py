@@ -28,7 +28,7 @@ DEFAULT_OUTPUT = r"C:\Users\admin\Trafic_mojo_2\YOLO-training\training_data\raw"
 DEFAULT_TRIGGERS = {"person", "bicycle", "car", "motorcycle", "bus", "truck"}
 
 ALL_CLASSES = [
-    "person", "bicycle", "car", "motorcycle", "bus", "truck",
+    "person", "bicycle", "car", "motorcycle", "bus", "truck", "train",
 ]
 
 VIDEO_EXTS = {".mp4", ".avi", ".mov", ".mkv", ".mts", ".m2ts", ".wmv", ".ts"}
