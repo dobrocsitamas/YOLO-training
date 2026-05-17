@@ -39,44 +39,23 @@ import yaml
 CLASS_NAMES = [
     "person",               # 0
     "bicycle",              # 1
-    "car",                  # 2
-    "motorcycle",           # 3
-    "bus_solo",             # 4
-    "bus_articulated",      # 5
-    "truck_light",          # 6
-    "truck_heavy",          # 7
-    "vehicle_combination",  # 8
+    "motorcycle",           # 2
+    "personal_car",         # 3
+    "light_truck",          # 4  – furgon, dobozos kisteher (< 3.5t)
+    "medium_truck",         # 5  – közepes teher (3.5–12t)
+    "heavy_truck",          # 6  – nehéz merev (> 12t)
+    "vehicle_combination",  # 7  – nyerges / pótkocsis szerelvény
+    "bus_solo",             # 8  – nagybusz szóló (> 20 fős)
+    "bus_articulated",      # 9  – csuklós busz
+    "trolley_solo",         # 10
+    "trolley_articulated",  # 11
+    "tram",                 # 12
+    "minibus",              # 13 – mikrobusz / kisbusz (9–20 fős)
 ]
 
-# Osztálynevek amit a COCO data.yaml-ban keresünk → célindex
-COCO_NAME_TO_TARGET: dict[str, int] = {
-    "person":     0,
-    "bicycle":    1,
-    "bike":       1,
-    "car":        2,
-    "automobile": 2,
-    "motorcycle": 3,
-    "motorbike":  3,
-    "moped":      3,
-}
-
-# Mappanév → class ID az egyedi képekhez
+# Mappanév → class ID (review_annotations.py kimeneti mappái)
 CUSTOM_FOLDER_MAP: dict[str, int] = {
-    # bus_solo (4)
-    "bus_solo": 4, "solo_bus": 4, "szolo_busz": 4,
-    "szolóbusz": 4, "solo_busz": 4,
-    # bus_articulated (5)
-    "bus_articulated": 5, "articulated_bus": 5, "csuklos_busz": 5,
-    "csuklos_busz": 5, "csuklosbusz": 5,
-    # truck_light (6)
-    "truck_light": 6, "light_truck": 6, "konnyuteher": 6,
-    "konnyu_teher": 6, "furgon": 6, "kisteher": 6,
-    # truck_heavy (7)
-    "truck_heavy": 7, "heavy_truck": 7, "nehezteher": 7,
-    "nehezteher": 7, "kozepes_teher": 7, "kamion": 7,
-    # vehicle_combination (8)
-    "vehicle_combination": 8, "szerelveny": 8,
-    "jarmuszerveny": 8, "trailer": 8, "nyerges": 8, "combination": 8,
+    name: i for i, name in enumerate(CLASS_NAMES)
 }
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
@@ -224,35 +203,58 @@ def process_custom_images(custom_root: Path) -> list[dict]:
 
     samples: list[dict] = []
     unknown_folders: list[str] = []
+    missing_txt = 0
 
     for folder in sorted(custom_root.iterdir()):
         if not folder.is_dir():
             continue
 
-        folder_key = folder.name.lower().replace(" ", "_")
-        class_id = CUSTOM_FOLDER_MAP.get(folder_key)
+        folder_key = folder.name.lower().strip()
 
+        if folder_key == "skipped":
+            print(f"  [--] skipped/  (kihagyva)")
+            continue
+
+        class_id = CUSTOM_FOLDER_MAP.get(folder_key)
         if class_id is None:
             unknown_folders.append(folder.name)
             continue
 
-        images = [f for f in sorted(folder.iterdir()) if f.suffix.lower() in IMAGE_EXTS]
-        class_name = CLASS_NAMES[class_id] if class_id < len(CLASS_NAMES) else f"class_{class_id}"
-        print(f"  [{class_id}] {class_name:<22} <- {folder.name}: {len(images)} kép")
+        images = sorted(f for f in folder.iterdir() if f.suffix.lower() in IMAGE_EXTS)
+        class_name = CLASS_NAMES[class_id]
+        print(f"  [{class_id:>2}] {class_name:<22} <- {folder.name}/  ({len(images)} kép)")
 
         for img_path in images:
+            txt_path = img_path.with_suffix(".txt")
+            if not txt_path.exists():
+                missing_txt += 1
+                continue
+
+            # Valós YOLO annotáció beolvasása – a review_annotations.py már
+            # elvégezte az átindexelést, nem kell placeholder-t generálni
+            lines = [l.strip() for l in txt_path.read_text(encoding="utf-8").splitlines()
+                     if l.strip()]
+            if not lines:
+                missing_txt += 1
+                continue
+
+            classes_in_txt = {int(l.split()[0]) for l in lines if l.split()}
+
             samples.append({
-                "image": img_path,
-                "label": None,
-                "classes": {class_id},
-                "remapped_lines": [f"{class_id} 0.5 0.5 1.0 1.0"],
+                "image":          img_path,
+                "label":          txt_path,
+                "classes":        classes_in_txt,
+                "remapped_lines": lines,
             })
 
     if unknown_folders:
-        print(f"\n[EGYEDI] FIGYELEM: Ismeretlen mappák (kihagyva): {unknown_folders}")
-        print("  Add hozzá a CUSTOM_FOLDER_MAP szótárhoz a scriptben!")
+        print(f"\n[EGYEDI] FIGYELEM – ismeretlen mappák (kihagyva): {unknown_folders}")
+        print("  Elvárt mappanevek:", list(CUSTOM_FOLDER_MAP.keys()))
 
-    print(f"[EGYEDI] Feldolgozott egyedi minták: {len(samples)}")
+    if missing_txt:
+        print(f"[EGYEDI] FIGYELEM – {missing_txt} kép kihagyva (hiányzó/üres .txt)")
+
+    print(f"[EGYEDI] Feldolgozott minták: {len(samples)}")
     return samples
 
 
@@ -362,18 +364,14 @@ def find_coco_splits(coco_dir: Path, requested: str | None) -> list[tuple[Path, 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Dataset Cleaner and Merger - COCO + egyedi adatok összevonása"
+        description="Dataset előkészítő – 14 osztályos YOLO tréning"
     )
-    parser.add_argument("--coco_dir", type=Path, default=None,
-        help="COCO dataset gyökérmappája (tartalmazza a data.yaml-t és a split almappákat)")
-    parser.add_argument("--coco_split", type=str, default=None,
-        help="Melyik COCO split: 'train', 'valid', 'test', vagy 'train,valid'. Auto-detect ha nincs megadva.")
-    parser.add_argument("--custom_root", type=Path, default=None,
-        help="Egyedi képek gyökérmappája (almappák neve = osztálynév)")
+    parser.add_argument("--custom_root", type=Path, required=True,
+        help="Átnézett képek gyökérmappája (review_annotations.py kimenete)")
     parser.add_argument("--output", type=Path, default=Path("dataset"),
         help="Kimeneti mappa (alapért.: ./dataset)")
-    parser.add_argument("--max_coco_per_class", type=int, default=2000,
-        help="Max COCO kép osztályonként balansz céljából (alapért.: 2000)")
+    parser.add_argument("--max_per_class", type=int, default=None,
+        help="Max kép osztályonként – opcionális egyensúlyozás (pl. 1500)")
     return parser.parse_args()
 
 
@@ -381,46 +379,43 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    all_samples: list[dict] = []
 
-    if args.coco_dir:
-        if not args.coco_dir.exists():
-            print(f"[HIBA] A mappa nem találhato (--coco_dir): {args.coco_dir}")
-            sys.exit(1)
-        id_remap = build_coco_id_remap(args.coco_dir)
-        splits = find_coco_splits(args.coco_dir, args.coco_split)
-        if not splits:
-            print("[COCO] Nem sikerült COCO adatot betölteni.")
-        else:
-            for img_dir, lbl_dir in splits:
-                coco_samples = filter_coco_labels(img_dir, lbl_dir, id_remap, args.max_coco_per_class)
-                print_stats(coco_samples, f"COCO ({lbl_dir.parent.name})")
-                all_samples.extend(coco_samples)
-    else:
-        print("[INFO] COCO adatok kihagyva (--coco_dir nem megadva)")
+    if not args.custom_root.exists():
+        print(f"[HIBA] A mappa nem található: {args.custom_root}")
+        sys.exit(1)
 
-    if args.custom_root:
-        if not args.custom_root.exists():
-            print(f"[HIBA] A mappa nem találhato (--custom_root): {args.custom_root}")
-            sys.exit(1)
-        custom_samples = process_custom_images(args.custom_root)
-        print_stats(custom_samples, "Egyedi képek")
-        all_samples.extend(custom_samples)
-    else:
-        print("[INFO] Egyedi képek kihagyva (--custom_root nem megadva)")
+    all_samples = process_custom_images(args.custom_root)
 
     if not all_samples:
         print("\n[HIBA] Nincs feldolgozható adat.")
-        print('Pelda: python scripts/prepare_dataset.py --coco_dir "D:/Traffic_Mojo_2/YOLO_training/Microsoft COCO dataset"')
         sys.exit(1)
 
-    print_stats(all_samples, "TELJES adathalmaz (egyesített)")
+    print_stats(all_samples, "Nyers adathalmaz")
+
+    if args.max_per_class:
+        rng = random.Random(RANDOM_SEED)
+        shuffled = list(all_samples)
+        rng.shuffle(shuffled)
+        kept: list[dict] = []
+        counts: dict[int, int] = defaultdict(int)
+        for s in shuffled:
+            pc = min(s["classes"]) if s["classes"] else 0
+            if counts[pc] < args.max_per_class:
+                kept.append(s)
+                counts[pc] += 1
+        removed = len(all_samples) - len(kept)
+        if removed:
+            print(f"[BALANSZ] {removed} kép kihagyva (max {args.max_per_class}/osztály)")
+        all_samples = kept
+        print_stats(all_samples, f"Kiegyensúlyozott (max {args.max_per_class}/osztály)")
+
     merge_and_split(all_samples, args.output)
     generate_yaml(args.output)
 
-    print("\n[OK] Dataset előkészítés sikeresen kész!")
-    print(f"     Kimenet: {args.output.resolve()}")
-    print(f"     Tréning: python scripts/train.py")
+    print("\n[KÉSZ] Dataset előkészítve!")
+    print(f"  Kimenet: {args.output.resolve()}")
+    print(f"\nKövetkező lépés:")
+    print(f"  python scripts/train.py")
 
 
 if __name__ == "__main__":
