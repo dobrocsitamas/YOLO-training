@@ -312,3 +312,120 @@ szempontból különbözik a nagybusztól és a dobozos kisteherautótól. A YOL
 4. `train.py` – első tréning futtatás (14 osztály, augmentációval)
 
 ---
+
+## 2026-05-16–17 – Dataset elkészítése, tréning hibák javítása, tréning elindítása
+
+### Dataset összeállítás
+
+`prepare_dataset.py` **teljes újraírása** 14 osztályos sémára:
+- Régi verzió placeholder annotációkat írt (`0 0.5 0.5 1.0 1.0`) minden képhez
+- Új verzió a tényleges `.txt` annotációkat olvassa be, üres / hiányzó annotációjú képeket kihagyja
+- COCO-kapcsolódó kód (`build_coco_id_remap`, `--coco_dir`) teljesen eltávolítva
+- Futtatás: `python scripts/prepare_dataset.py --custom_root "C:\Users\admin\Trafic_mojo_2\Training_pictures_reviewed"`
+
+**Eredmény:** 9272 kép → 7417 train / 1855 val
+
+**Adat-tisztítási lépés:** 6 label fájlban érvénytelen (≥14) osztály ID-k maradtak
+(régi COCO ID-k: 24, 26, 30). Python egysoros scripttel eltávolítva:
+```python
+import glob, pathlib
+for f in glob.glob('dataset/labels/**/*.txt', recursive=True):
+    lines = [l for l in pathlib.Path(f).read_text().splitlines() if l and int(l.split()[0]) < 14]
+    pathlib.Path(f).write_text('\n'.join(lines) + '\n')
+```
+
+### Tréning indítási hibák javítása
+
+**1. hiba – Windows multiprocessing crash:**
+- `RuntimeError: freeze_support()` – a `train.py` hiányzó `if __name__ == '__main__':` guard miatt
+  a worker processek rekurzívan reimportálták a fő modult
+- Javítás: teljes tréning kód becsomagolva `if __name__ == '__main__':` blokk alá
+
+**2. hiba – OSError: page file too small:**
+- `workers=4` esetén a CUDA DLL-ek nem tölthetők be a subprocess-ekben Windows
+  virtuális memória korlát miatt
+- Javítás: `workers=0` (single-process dataloader) – ~3–4 perc/epoch vs. ~2 perc,
+  de stabilan fut
+
+### Tréning paraméterek
+
+```python
+model = YOLO("yolo11s.pt")
+model.train(
+    data="dataset/data.yaml",
+    epochs=100, imgsz=640, batch=16,
+    device=0, workers=0, patience=20,
+    project="runs/train", name="traffic_v2",
+    degrees=10.0, scale=0.5, shear=2.0,
+    fliplr=0.5, flipud=0.0,
+    mosaic=1.0, mixup=0.15, copy_paste=0.1,
+)
+```
+
+Futtatás mappája: `runs/train/traffic_v2-4/`
+
+---
+
+## 2026-05-17–18 – Tréning befejezése, kiértékelés
+
+### Tréning eredmény
+
+- **85 epoch** futott le (early stopping, patience=20, legjobb: epoch 66)
+- Teljes futásidő: ~8.4 óra
+- Modell: `runs/detect/runs/train/traffic_v2-4/weights/best.pt`
+
+**Összesített metrikák (best epoch 66):**
+
+| Metrika | Érték |
+|---------|-------|
+| mAP50 | **0.710** |
+| mAP50-95 | **0.484** |
+| Precision | 0.703 |
+| Recall | 0.686 |
+| val cls_loss | 0.749 |
+
+**Per-class validáció (best.pt):**
+
+| Osztály | mAP50 | Értékelés |
+|---------|-------|-----------|
+| personal_car | 0.917 | ⭐ Kiváló |
+| tram | 0.948 | ⭐ Kiváló (32 kép ellenére) |
+| bus_articulated | 0.864 | ⭐ Kiváló |
+| bus_solo | 0.845 | ⭐ Kiváló |
+| person | 0.811 | Jó |
+| bicycle | 0.692 | Közepes |
+| light_truck | 0.700 | Közepes |
+| heavy_truck | 0.675 | Közepes |
+| vehicle_combination | 0.676 | Közepes |
+| minibus | 0.619 | Gyenge – több adat kell |
+| medium_truck | 0.611 | Gyenge – több adat kell |
+| motorcycle | 0.577 | Gyenge – kevés adat (50 kép) |
+| trolley_articulated | 0.249 | ❌ Gyakorlatilag nincs adat |
+| trolley_solo | – | ❌ Nincs adat |
+
+**Inference sebesség:** 1.6ms/kép (GPU) – ~625 FPS
+
+### Következő tréning előtt elvégzendők
+
+1. **Éles teszt** – számlálás feldolgozásban a `best.pt` modellel
+2. **Adatgyűjtés** (prioritás sorrendben):
+   - `motorcycle` – min. +150 kép
+   - `medium_truck` – min. +200 kép
+   - `minibus` – min. +150 kép
+   - `trolley_solo` / `trolley_articulated` – bármennyi (helyszíni videó)
+3. **Annotáció-minőség javítása** (labelImg vagy beépített szerkesztő) – különösen
+   `medium_truck` és `minibus` osztályoknál rossz box-ok lehetnek
+4. **Teljes újratréning** `yolo11s.pt` alapmodelltől – nem fine-tuning, mert az
+   új adatoknak elejétől látni kell az egész datasetet
+   
+### Döntések / tanulságok
+
+- `workers=0` marad Windows alatt – stabil, minimális sebesség-veszteség
+- Fine-tuning a `best.pt`-ről **nem ajánlott** új adatok hozzáadásakor:
+  catastrophic forgetting kockázata + alacsony LR miatt lassú tanulás
+- A tram kiváló eredménye (0.948) mutatja: vizuálisan egyedi osztályhoz
+  elegendő ~30-50 kép is, ha az annotáció jó minőségű
+- mAP50 vs. mAP50-95 különbség (0.71 vs. 0.48) arra utal, hogy a bounding boxok
+  pozíciója pontatlan egyes osztályoknál – annotáció-javítás javasolt
+
+---
