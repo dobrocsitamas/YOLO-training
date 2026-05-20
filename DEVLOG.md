@@ -429,3 +429,107 @@ Futtatás mappája: `runs/train/traffic_v2-4/`
   pozíciója pontatlan egyes osztályoknál – annotáció-javítás javasolt
 
 ---
+
+## 2026-05-20 – Dataset tisztítás + Traffic14_V3 tréning
+
+### Előzmény: Traffic14_V2 éles teszt kudarca
+
+Ugyanazon 10 perces tesztvideon (2026-04-16, Csepel Betű utca):
+- YOLO11S: ~256 jármű detektálva
+- Traffic14_V2: csak ~61 jármű – súlyos aluldetektálás
+
+**Gyökérokok feltárása:**
+
+1. **`review_annotations.py` ID-bug**: A teherautó alkategóriák (light/medium/heavy_truck,
+   vehicle_combination) COCO ID-val kerültek tárolásra (pl. heavy_truck mappában
+   ID=7 volt vehicle_combination helyett ID=6). A `filter_labels_to_trigger.py`
+   szkript javított: 675 ID helyesen remappelve a kin-group logikával.
+
+2. **Multi-annotáció zaj**: Minden képen az összes háttérjármű annotálva volt,
+   de ezek soha nem lettek manuálisan ellenőrizve → szisztematikus félreclass-ifikációs
+   zaj. Megoldás: **trigger-only módszer** – képenként csak az ellenőrzött fő jármű
+   annotációja marad.
+
+### Dataset újraépítés
+
+**Szkriptek lefuttatva (ebben a sorrendben):**
+
+1. `filter_labels_to_trigger.py` – csak trigger annotációk megtartása, ID-bug javítása
+   - 675 ID remappelve
+   - 94 fájl üres maradt (nincs trigger annotáció)
+
+2. `check_and_delete_empty.py` – üres .txt + párolt .jpg törlése
+   - Törölve: minibus:60, bus_solo:24, motorcycle:3, personal_car:3,
+     bus_articulated:2, light_truck:1, tram:1 → összesen 94 pár
+
+3. Régi dataset archiválva (9 GB, 9272 kép), majd töröve.
+   Dataset újragenerálva `build_dataset.py`-vel.
+
+**Végeredmény:**
+- Train: 7342 kép, Val: 1836 kép
+- Összesen: 14883 annotáció
+- Osztályonkénti eloszlás:
+  ```
+  person:4184  bicycle:237  motorcycle:40  personal_car:4877
+  light_truck:1674  medium_truck:703  heavy_truck:248
+  vehicle_combination:1146  bus_solo:604  bus_articulated:710
+  trolley_solo:0  trolley_articulated:0  tram:48  minibus:412
+  ```
+
+### Tréning: traffic_v2-5
+
+```
+Alap modell:  yolo11s.pt (scratch – nem fine-tuning)
+epochs=100, imgsz=640, batch=16, patience=20
+device=0, workers=0, mosaic=1.0, mixup=0.15, copy_paste=0.1
+```
+
+**Eredmény:**
+- Futásidő: 8.849 óra (RTX 5060)
+- Best epoch: 71 (early stop 91-nél)
+- **mAP50 (all): 0.786** (vs. V2: 0.710, +10.7%)
+- mAP50-95: 0.547
+
+Osztályonkénti mAP50:
+| Osztály              | mAP50 | Megjegyzés |
+|----------------------|-------|------------|
+| person               | 0.764 | |
+| bicycle              | 0.812 | |
+| motorcycle           | 0.982 | |
+| personal_car         | 0.689 | diversity hiánya (csak Csepel) |
+| light_truck          | 0.769 | |
+| medium_truck         | 0.759 | |
+| heavy_truck          | 0.461 | ❌ kevés adat (248 kép) |
+| vehicle_combination  | 0.840 | |
+| bus_solo             | 0.879 | |
+| bus_articulated      | 0.877 | |
+| trolley_solo         | 0.000 | ❌ nincs tanítókép |
+| trolley_articulated  | 0.000 | ❌ nincs tanítókép |
+| tram                 | 0.895 | |
+| minibus              | 0.711 | |
+
+### Traffic14_V3 csomagolás
+
+Modellfájl: `TM_modulok_py/Traffic_Mojo_2_0/YOLO_models/Traffic14_V3/`
+- `traffic14_v3.pt` – best.pt másolata (19.2 MB)
+- `traffic14_v3.categories` – JSON osztályleíró (14 osztály, magyar nevek)
+- `model.info` – teljesítményadatok, metodológia
+
+### Következő lépések
+
+1. **Éles teszt** – Traffic14_V3 ugyanazon tesztvideon (cél: >200 detektálás)
+2. **`config_local.py` frissítése** → V3 útvonalra
+3. **Képgyűjtő tooling fejlesztése** (időablakos mintavétel, minőségszűrők,
+   osztályonkénti cap)
+4. **Diversity javítás** – több helyszín, más kameraállások
+5. **V4 tréning** az összegyűjtött változatosabb adattal
+
+### Döntések / tanulságok
+
+- **Trigger-only annotáció** bevált: tisztább osztályhatárok, nincs háttérzaj
+- A vizuális diversity hiánya (csak Csepel, csak 151-es kék csuklós busz) a
+  személyautó gyenge mAP50-jának fő oka – V4-ben ezt kell megoldani
+- `heavy_truck` (0.461): adatmennyiség az elsődleges probléma, nem annotáció
+- `nc=14` marad (trolleybus class-ok bennmaradnak, amíg adat nincs hozzájuk)
+
+---

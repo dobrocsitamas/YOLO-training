@@ -1,6 +1,6 @@
 from ultralytics import YOLO
 
-model = YOLO("runs/train/traffic_v2/weights/best.pt")
+model = YOLO("runs/detect/runs/train/traffic_v2-4/weights/best.pt")
 
 # ── ONNX export ─────────────────────────────────────────────────────────────
 model.export(format="onnx", imgsz=640, simplify=True)
