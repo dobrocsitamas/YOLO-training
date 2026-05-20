@@ -533,3 +533,61 @@ Modellfájl: `TM_modulok_py/Traffic_Mojo_2_0/YOLO_models/Traffic14_V3/`
 - `nc=14` marad (trolleybus class-ok bennmaradnak, amíg adat nincs hozzájuk)
 
 ---
+
+## 2026-05-20 – Traffic14_V3 éles teszt: kudarc + stratégiaváltás
+
+### V3 éles teszt eredménye
+
+Ugyanaz a 10 perces tesztvideon (2026-04-16, Csepel Betű utca):
+- YOLO11S:       ~256 jármű
+- Traffic14_V2:  ~61 jármű
+- Traffic14_V3:  ~19 jármű (conf=0.25 és conf=0.10 mellett is!) – nem javult
+
+**Gyökérok:** A `filter_labels_to_trigger.py` minden más osztály képéről törölte
+a személyautó/gyalogos háttér-annotációkat. Eredmény: ~7700 képen a személyautó
+jelöletlen → modell megtanulta: „háttérben lévő autó = háttér". val mAP50=0.786
+félrevezető volt – a validáció is trigger-only adatból állt.
+
+### Annotáció-minőség vizsgálat (browse_annotations.py)
+
+Új eszköz: `scripts/browse_annotations.py` – tkinter böngésző bounding boxokkal,
+Traffic14/COCO schema-váltóval, tetszőleges mappára navigálással (📁 Tallózás gomb),
+archív összehasonlítással.
+
+Feltárt problémák az archív annotációkban:
+1. **COCO→Traffic14 remapping hiba**: cls5(bus)→cls5(medium_truck!),
+   cls7(truck)→cls7(vehicle_combination!) – háttér bus/truck annotációk rossz kategóriát kaptak
+2. **Óriási bounding boxok**: közeli járműveknél w>0.5, h>0.5
+3. **Hiányzó háttér-annotációk**: filter_labels_to_trigger.py törölte őket
+
+**Megbízható háttér-annotációk:** csak cls0/1/2/3 (person/bicycle/motorcycle/car).
+**Megbízhatatlan:** cls4-13 háttér-annotációk.
+
+### Stratégiaváltás: kétlépéses (two-stage) architektúra ← ÚJ IRÁNY
+
+**Felismerés:** A YOLO11S detektálása tökéletes (person/car/truck/bus szinten).
+Nem kell új YOLO modell – csak másodlagos classifier a truck/bus alkategóriákhoz.
+
+```
+YOLO11S (változatlan, tökéletes detektálás)
+  → "truck" találat + kordon-átlépés
+      → truck_classifier: light / medium / heavy / vehicle_combination
+  → "bus" találat + kordon-átlépés
+      → bus_classifier: solo / articulated
+```
+
+**Tanítóadatok már megvannak** (`Training_pictures_reviewed/`):
+- Truck: light(1598) + medium(655) + heavy(227) + vehicle_combination(1022) = 3502 kép
+- Bus: solo(627) + articulated(720) = 1347 kép
+
+**Integráció:** Kordon-átlépéskor `process_video.py` kivágja a track legjobb
+frame-jét (legjobb confidence), átadja a classifier-nek, finomított kategória kerül az Excel-be.
+
+### Következő lépések (holnap)
+
+1. Truck classifier tanítása (EfficientNet-B0 / ResNet18, 4 osztály, ~3500 kép)
+2. Bus classifier tanítása (2 osztály, ~1347 kép)
+3. Integráció `process_video.py`-ba: best-frame kivágás + classifier hívás
+4. Éles teszt
+
+---
