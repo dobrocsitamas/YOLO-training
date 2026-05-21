@@ -591,3 +591,59 @@ frame-jét (legjobb confidence), átadja a classifier-nek, finomított kategóri
 4. Éles teszt
 
 ---
+
+## 2026-05-21 – Classifier integráció + virtuális ID rendszer
+
+### Elkészült: `vehicle_classifier.py` modul
+- `VehicleClassifier` osztály: `load(dir)`, `predict(crop)`, `display_name(clf_result)`, `is_applicable(yolo_cls)`
+- `scan_classifier_models(base_dir)` → `[{path, display}]` lista a web UI dropdown-hoz
+- EfficientNet-B0 alapú, `classifier.categories` JSON metaadat fájl alapján tölt be
+
+### Elkészült: `classifier_models/vehicle_v1/`
+- Architektúra: EfficientNet-B0, input: 224×224, margin: 10%
+- Val accuracy: **95.2%**
+- `applies_to_yolo_classes: [5, 7]` (COCO: busz, tehergépkocsi)
+- Output osztályok: `light_truck`, `heavy_truck`, `vehicle_combination`, `bus_solo`, `bus_articulated`
+- Tanítási minták: light_truck=923, heavy_truck=343, vehicle_combination=406, bus_solo=216, bus_articulated=84
+
+### Megoldott: COCO ID ütközés → virtuális ID rendszer
+
+**Probléma:** A YOLO11s standard COCO80 modell. Az `active_classes` lista közvetlenül megy a
+`model.track(classes=...)` paraméterbe – tehát soha nem tartalmazhat 0–79-en kívüli vagy nem COCO
+osztályt (pl. 4=airplane, 6=train stb. már foglalt).
+
+**Megoldás:** 5xx/7xx prefix rendszer (szülő COCO ID × 100 + sorszám):
+
+| Virtual ID | Jelentés | Szülő COCO ID |
+|-----------|----------|---------------|
+| 501 | Szóló busz | 5 |
+| 502 | Csuklós autóbusz | 5 |
+| 701 | Könnyű tehergépkocsi | 7 |
+| 702 | Nehéz tehergépkocsi | 7 |
+| 703 | Jármű szerelvény | 7 |
+
+Virtual ID-k soha nem kerülnek a YOLO-ba – `_active_to_yolo_classes()` visszafordítja COCO ID-ra.
+
+### Változtatások: `process_video.py`
+- `_CLF_VIRTUAL_TO_YOLO` – virtual→COCO mapping szótár
+- `_CLF_OUTPUT_TO_VIRTUAL` – classifier output string → virtual ID
+- `_CLF_VIRTUAL_NAMES` – virtual ID → magyar megjelenítési név
+- `_active_to_yolo_classes(active_classes)` – YOLO filter generálása (virtual ID-kat visszafejti COCO-ra)
+- `_get_effective_cls(final_cls, obj_id, vehicle_clf, track_info)` – YOLO cls → virtual ID, cache-eli `track_info[obj_id]['clf_virtual_id']`-ben
+- `model.track(classes=_active_to_yolo_classes(active_classes))` – YOLO soha nem kap virtual ID-t
+- Counting: `eff_cls not in active_classes` → skip (szűrő, ha pl. csak bizonyos alosztályra kell)
+- `matched_row` label: `_CLF_VIRTUAL_NAMES.get(eff_cls, yolo_fallback)` – pl. "Nehéz tehergépkocsi"
+
+### Változtatások: `templates/desktop.html`
+- `_collectActiveClasses()` helper: `data-ids="501,502"` típusú csoportos checkboxokat is kiteríti
+- `renderClassCheckboxes` clf=ON: 5 egyedi COCO checkbox (0,1,2,3,12) + 2 csoportos gomb:
+  - `data-ids="501,502"` → 🚌 Busz (szóló + csuklós együtt)
+  - `data-ids="701,702,703"` → 🚚 Tehergépkocsi (könnyű / nehéz / szerelvény együtt)
+- `onClfToggle`: automatikus ID-mapping váltáskor (5↔501+502, 7↔701+702+703)
+- `saveConfig` + start payload: `_collectActiveClasses()` mindkét helyen
+
+### Változtatások: `config.py` / `config_local.py`
+- `config.py` default: `active_classes = [0,1,2,3,5,7,12]` (clf=OFF, tiszta COCO ID-k)
+- `config_local.py` (jelen gép): `active_classes = [0,1,2,3,12,501,502,701,702,703]` (clf=BE)
+
+---
