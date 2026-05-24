@@ -647,3 +647,70 @@ Virtual ID-k soha nem kerülnek a YOLO-ba – `_active_to_yolo_classes()` vissza
 - `config_local.py` (jelen gép): `active_classes = [0,1,2,3,12,501,502,701,702,703]` (clf=BE)
 
 ---
+
+## 2026-05-24 – Classifier hibák javítása + rezervoár mintavételezés
+
+### Javított bug: `best_crop` soha nem töltődött be (process_video.py)
+
+**Gyökérok:** A `track_info` inicializálásakor `'max_conf': current_conf` volt beállítva
+(az első detektálás confidence értéke). Emiatt az `if current_conf > max_conf:` feltétel
+az első frame-en soha nem teljesült (pl. `0.75 > 0.75` = False), tehát a `best_crop`
+örökre `None` maradt azoknál a járműveknél, ahol az első detektálás volt a legmagasabb
+confidence-ű. A classifier ennek következtében sohasem futott – a jármű nyers YOLO
+`truck` kategóriaként kerülhetett a statisztikába, vagy teljesen kihagyódott.
+
+**Miért érintette ez főleg a jármű szerelvényeket:** hosszú járműveknél az első megjelenés
+pillanatában látható a teljes jármű a legtisztábban → ott a legmagasabb a YOLO confidence.
+Később ahogy halad, a kép elvágódhat, a confidence csökken.
+
+**Javítás:** `'max_conf': 0.0` → az első frame detektálása mindig elmenti a `best_crop`-ot.
+
+### Továbbfejlesztés: rezervoár mintavételezés + batch predikció
+
+**Probléma a javítás után:** A legjobb confidence-ű frame (jellemzően az első, frontális
+nézet) nem alkalmas szerelvény-felismerésre – az oldalnézet a legmegbízhatóbb, de ott
+már alacsonyabb a confidence.
+
+**Megoldás:** Reservoir sampling algoritmus + batch inferencia:
+- `clf_crops: []` – max `_MAX_CLF_CROPS = 5` kép gyűjtése **minden frame-ről** (nem csak
+  a legjobb confidence-ű frame-ről), véletlenszerűen elosztva az egész track időtartamán
+  (Algorithm R szerinti rezervoár csere: `j = random.randint(0, fc-1); if j < 5: csere`)
+- A crop-gyűjtés **független a confidence értékétől** → garantáltan kerülnek közép-/
+  oldalnézeti képek is a mintába
+- `predict_batch(crops)` – az 5 képet egyetlen GPU forward pass-ban dolgozza fel
+  (nem 5× lassabb, batch-párhuzamosítás)
+- `softmax` valószínűségek alapján a **legmagasabb confidence-ű egyedi predikció** dönt
+- A győztes crop visszakerül `best_crop`-ba a debug képmentéshez
+
+### Új metódus: `vehicle_classifier.py` → `predict_batch(crops_bgr)`
+- Input: `List[np.ndarray]` – BGR crop lista (None / üres crop-ok automatikusan kihagyva)
+- Output: `[(class_name, confidence_float), ...]` – azonos sorrendben
+- Belső: `torch.stack` → egyetlen forward pass → `softmax` → `max` per kép
+
+### Változtatások összefoglalva
+
+**`process_video.py`:**
+- `import random` hozzáadva
+- `_MAX_CLF_CROPS = 5` konstans
+- `track_info` init: `max_conf: 0.0`, `clf_crops: []`, `clf_frame_count: 0`
+- Crop-gyűjtés kikerült a `max_conf` blokkból → minden detektálásnál fut (is_applicable esetén)
+- `_get_effective_cls()` újraírva: `predict_batch(crops)` hívás, legjobb prob döntés,
+  győztes crop visszamentése `best_crop`-ba
+
+**`vehicle_classifier.py`:**
+- `predict_batch(crops_bgr)` új metódus
+
+### Éles tesztek eredménye (2026-05-24, Csepel Betű utca)
+- Szerelvény kategorizálás **érezhetően javult** a rezervoár mintavételezés után
+- Korábban: szerelvények nagy része `Nehéz tehergépkocsi`-ként jelent meg → most helyes
+- Közepes teher kategória: nincs (a modell 5 osztályra lett tanítva: light/heavy/vehicle_combination/bus_solo/bus_articulated)
+
+### Hamis irány detektálás vizsgálata (v5→v7, v1→v4)
+- `current_p = (int((box[0]+box[2])/2), int(box[3]))` – bounding box alsó szélének közepe –
+  **egységes minden kategóriánál**, programhiba kizárva
+- v5→v7: v5 jobb vége (935,331) és v7 bal vége (1017,243) mindössze ~82 px távolságra –
+  hosszú jármű egyszerre metszheti mindkettőt
+- v1→v4: v1 és v4 közel vannak a kép jobb oldalán – rövid úton átmegy rajta egyes jármű
+- **Döntés:** kordon-elhelyezéssel oldja meg a felhasználó (kód változtatás nem szükséges)
+
+---
