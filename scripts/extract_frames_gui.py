@@ -287,25 +287,48 @@ class App(tk.Tk):
     # ── Tallóz ────────────────────────────────────────────────────────────────
 
     def _browse_video_file(self):
+        current = self._video_var.get()
+        p = Path(current) if current else None
+        if p and p.is_file():
+            init = str(p.parent)
+        elif p and p.is_dir():
+            init = str(p)
+        else:
+            init = str(Path.home())
         path = filedialog.askopenfilename(
             title="Válassz videó fájlt",
             filetypes=[("Videó", "*.mp4 *.avi *.mov *.mkv *.mts *.m2ts *.wmv *.ts"),
                        ("Minden fájl", "*.*")],
-            initialdir=self._video_var.get() or "/",
+            initialdir=init,
         )
         if path:
             self._video_var.set(path)
 
     def _browse_video_dir(self):
+        current = self._video_var.get()
+        p = Path(current) if current else None
+        if p and p.is_file():
+            init = str(p.parent)
+        elif p and p.is_dir():
+            init = str(p)
+        else:
+            init = str(Path.home())
         path = filedialog.askdirectory(
             title="Válassz videó mappát",
-            initialdir=self._video_var.get() or "/",
+            initialdir=init,
         )
         if path:
             self._video_var.set(path)
 
     def _browse_model(self):
-        init = str(Path(self._model_var.get()).parent) if self._model_var.get() else "/"
+        current = self._model_var.get()
+        p = Path(current) if current else None
+        if p and p.is_file():
+            init = str(p.parent)
+        elif p and p.is_dir():
+            init = str(p)
+        else:
+            init = str(Path.home())
         path = filedialog.askopenfilename(
             title="Válassz YOLO modell fájlt (.pt)",
             filetypes=[("PyTorch model", "*.pt"), ("Minden fájl", "*.*")],
@@ -315,9 +338,17 @@ class App(tk.Tk):
             self._model_var.set(path)
 
     def _browse_output(self):
+        current = self._output_var.get()
+        p = Path(current) if current else None
+        if p and p.is_file():
+            init = str(p.parent)
+        elif p and p.is_dir():
+            init = str(p)
+        else:
+            init = str(Path.home())
         path = filedialog.askdirectory(
             title="Válassz kimeneti mappát",
-            initialdir=self._output_var.get() or "/",
+            initialdir=init,
         )
         if path:
             self._output_var.set(path)
